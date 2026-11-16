@@ -2,6 +2,16 @@ import { getValidAccessToken, refreshTokens } from "./auth.js";
 
 const BASE_URL = "https://api.mercadolibre.com";
 
+export function apiUrl(path: string): URL {
+  if (!path.startsWith('/') || path.startsWith('//') || /[%\\?#\x00-\x20]/.test(path) ||
+      path.split('/').some(part => part === '.' || part === '..')) {
+    throw new Error('Invalid API path');
+  }
+  const url = new URL(BASE_URL + path);
+  if (url.origin !== BASE_URL) throw new Error('Invalid API origin');
+  return url;
+}
+
 export class MeliApiError extends Error {
   constructor(
     public status: number,
@@ -29,7 +39,7 @@ async function request<T>(
 ): Promise<T> {
   const token = await getValidAccessToken();
 
-  const url = new URL(BASE_URL + path);
+  const url = apiUrl(path);
   for (const [key, value] of Object.entries(opts.params ?? {})) {
     if (value !== undefined && value !== "") {
       url.searchParams.set(key, String(value));
@@ -49,7 +59,7 @@ async function request<T>(
     body = opts.body !== undefined ? JSON.stringify(opts.body) : undefined;
   }
 
-  const res = await fetch(url, { method, headers, body });
+  const res = await fetch(url, { method, headers, body, redirect: "error", signal: AbortSignal.timeout(30_000) });
 
   if (res.status === 401 && !retried) {
     await refreshTokens();
@@ -107,7 +117,7 @@ export async function meliGetRaw(
   retried = false
 ): Promise<{ contentType: string; data: Buffer }> {
   const token = await getValidAccessToken();
-  const url = new URL(BASE_URL + path);
+  const url = apiUrl(path);
   for (const [key, value] of Object.entries(params ?? {})) {
     if (value !== undefined && value !== "") {
       url.searchParams.set(key, String(value));
@@ -115,6 +125,8 @@ export async function meliGetRaw(
   }
   const res = await fetch(url, {
     method: "GET",
+    redirect: "error",
+    signal: AbortSignal.timeout(30_000),
     headers: { Authorization: `Bearer ${token}`, Accept: accept },
   });
   if (res.status === 401 && !retried) {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 
 export interface StoredTokens {
@@ -21,10 +22,13 @@ export function loadTokens(): StoredTokens | null {
 
 export function saveTokens(tokens: StoredTokens): void {
   fs.mkdirSync(path.dirname(config.tokensFile), { recursive: true });
-  fs.writeFileSync(config.tokensFile, JSON.stringify(tokens, null, 2), {
-    mode: 0o600,
-  });
-  enforceTokenPermissions();
+  const temp = `${config.tokensFile}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temp, JSON.stringify(tokens, null, 2), { mode: 0o600, flag: 'wx' });
+    fs.renameSync(temp, config.tokensFile);
+  } finally {
+    try { fs.unlinkSync(temp); } catch { /* renamed or not created */ }
+  }
 }
 
 // The token file holds account credentials; it must not be group/other

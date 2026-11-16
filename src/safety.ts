@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { config, rootDir } from "./config.js";
+import { config } from "./config.js";
 
 export const ALL_TOOLS: readonly string[] = [
   "search_products",
@@ -90,13 +90,10 @@ export interface SafetyConfig {
 }
 
 export function resolveSafety(): SafetyConfig {
-  const profile = PROFILES[config.toolProfile] ? config.toolProfile : "all";
-  if (profile !== config.toolProfile) {
-    console.error(
-      `Warning: unknown ML_TOOL_PROFILE '${config.toolProfile}', falling back to 'all'.`
-    );
+  if (!Object.hasOwn(PROFILES, config.toolProfile)) {
+    throw new Error("Unknown ML_TOOL_PROFILE; refusing to expose tools");
   }
-  return { readOnly: config.readOnly, profile };
+  return { readOnly: config.readOnly, profile: config.toolProfile };
 }
 
 export function isWriteTool(name: string): boolean {
@@ -104,12 +101,10 @@ export function isWriteTool(name: string): boolean {
 }
 
 export function toolAllowed(name: string, safety: SafetyConfig): boolean {
-  if (safety.readOnly) {
-    // manage_question_blacklist stays registered in read-only mode, but its
-    // handler rejects block/unblock — only "list" works.
-    return !isWriteTool(name) || name === "manage_question_blacklist";
-  }
-  return PROFILES[safety.profile]?.has(name) ?? true;
+  // Local filesystem capabilities are not exposed to MCP callers.
+  if (name === "upload_video") return false;
+  if (!Object.hasOwn(PROFILES, safety.profile)) return false;
+  return PROFILES[safety.profile].has(name) && (!safety.readOnly || !isWriteTool(name));
 }
 
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
@@ -129,8 +124,9 @@ export const CONTACT_INFO_MESSAGE =
 export function auditLog(entry: Record<string, unknown>): void {
   try {
     fs.appendFileSync(
-      path.join(rootDir, "audit.log"),
-      JSON.stringify(entry) + "\n"
+      path.join(path.dirname(config.tokensFile), "audit.log"),
+      JSON.stringify(entry) + "\n",
+      { mode: 0o600 }
     );
   } catch (err) {
     console.error("Warning: could not write to audit.log:", err);

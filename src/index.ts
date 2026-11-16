@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { z, type ZodRawShape, type ZodTypeAny } from "zod";
-import { config, rootDir } from "./config.js";
+import { z, type ZodRawShape } from "zod";
+import { config } from "./config.js";
 import {
   MeliApiError,
   meliDelete,
@@ -28,7 +28,7 @@ import { enforceTokenPermissions } from "./token-store.js";
 const server = new McpServer({
   name: "mcp-mercadolivre",
   version: "1.0.0",
-});
+}, { maxToolInputElements: 2048 });
 
 const safety = resolveSafety();
 enforceTokenPermissions();
@@ -44,7 +44,7 @@ function registerTool<Args extends ZodRawShape>(
   name: string,
   meta: { description: string; inputSchema: Args },
   handler: (
-    args: z.objectOutputType<Args, ZodTypeAny>
+    args: z.output<z.ZodObject<Args>>
   ) => Promise<ToolResult> | ToolResult
 ): void {
   if (!toolAllowed(name, safety)) return;
@@ -53,13 +53,12 @@ function registerTool<Args extends ZodRawShape>(
     meta,
     (async (args: unknown) => {
       if (!isWriteTool(name))
-        return handler(args as z.objectOutputType<Args, ZodTypeAny>);
+        return handler(args as z.output<z.ZodObject<Args>>);
       const ts = new Date().toISOString();
-      const result = await handler(args as z.objectOutputType<Args, ZodTypeAny>);
+      const result = await handler(args as z.output<z.ZodObject<Args>>);
       auditLog({
         ts,
         tool: name,
-        params: JSON.stringify(args ?? {}).slice(0, 500),
         result: result?.isError ? "error" : "ok",
       });
       return result;
@@ -626,7 +625,7 @@ registerTool(
         .optional()
         .describe("Id of a video previously uploaded to the seller's account"),
       shipping: z
-        .record(z.unknown())
+        .record(z.string(), z.unknown())
         .optional()
         .describe("Shipping options object, e.g. {free_shipping: true, mode: 'me2'}"),
     },
@@ -807,44 +806,24 @@ registerTool(
   "upload_picture",
   {
     description:
-      "Upload a picture to the seller's Mercado Livre account and get back a picture id. Provide exactly ONE of: url (a public image URL that Meli will download) or file_path (a local image file, uploaded as multipart). Use the returned id in create_item's pictures when the images are local files; for images already hosted at a public URL, passing the URL directly to create_item also works. Returns the picture id, source URL and size variations.",
+      "Upload a picture to the seller's Mercado Livre account and get back a picture id. Provide a public HTTPS image URL that Meli will download. Local file uploads are disabled. Use the returned id in create_item pictures. Returns the picture id, source URL and size variations.",
     inputSchema: {
       url: z
         .string()
         .url()
         .optional()
         .describe("Public URL of the image; Meli downloads it"),
-      file_path: z
-        .string()
-        .optional()
-        .describe("Absolute path to a local image file (jpg/png); sent as multipart upload"),
+
     },
   },
-  async ({ url, file_path }) => {
+  async ({ url }) => {
     try {
-      if ((url === undefined) === (file_path === undefined)) {
-        return fail(
-          new Error("Provide exactly one of 'url' or 'file_path'.")
-        );
+      if (!url) return fail(new Error("A public HTTPS image URL is required; local files are disabled"));
+      const source = new URL(url);
+      if (source.protocol !== "https:" || source.username || source.password) {
+        return fail(new Error("Only HTTPS image URLs without credentials are permitted"));
       }
-      let picture: Record<string, unknown>;
-      if (url !== undefined) {
-        picture = await meliPost<Record<string, unknown>>("/pictures", {
-          source: url,
-        });
-      } else {
-        const buffer = await readFile(file_path!);
-        const form = new FormData();
-        form.append(
-          "file",
-          new Blob([new Uint8Array(buffer)]),
-          path.basename(file_path!)
-        );
-        picture = await meliPostForm<Record<string, unknown>>(
-          "/pictures",
-          form
-        );
-      }
+      const picture = await meliPost<Record<string, unknown>>("/pictures", { source: url });
       const variations = Array.isArray(picture.variations)
         ? (picture.variations as Array<Record<string, unknown>>).map((v) => ({
             size: v.size,
@@ -856,57 +835,6 @@ registerTool(
         source: picture.source ?? url,
         max_size: picture.max_size,
         variations,
-      });
-    } catch (err) {
-      return fail(err);
-    }
-  }
-);
-
-const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".avi", ".mkv", ".webm"]);
-
-registerTool(
-  "upload_video",
-  {
-    description:
-      "Upload a product video from a local file to the seller's Mercado Livre account and get back a video_id. Pass that video_id to create_item or update_item to attach the video to a listing. Only local files are supported (mp4, mov, avi, mkv, webm). Meli enforces size/duration limits on product videos — very large or long files are rejected by the API, and in that case the API error is returned as-is so you can adjust the file and retry. Returns the video_id plus basic response info (id, max size/quality when present).",
-    inputSchema: {
-      file_path: z
-        .string()
-        .describe("Absolute path to a local video file (.mp4, .mov, .avi, .mkv or .webm)"),
-    },
-  },
-  async ({ file_path }) => {
-    try {
-      const ext = path.extname(file_path).toLowerCase();
-      if (!VIDEO_EXTENSIONS.has(ext)) {
-        return fail(
-          new Error(
-            `Unsupported video extension '${ext || "(none)"}'; expected one of: ${[...VIDEO_EXTENSIONS].join(", ")}.`
-          )
-        );
-      }
-      let buffer: Buffer;
-      try {
-        buffer = await readFile(file_path);
-      } catch {
-        return fail(new Error(`File not found or unreadable: ${file_path}`));
-      }
-      const form = new FormData();
-      form.append(
-        "file",
-        new Blob([new Uint8Array(buffer)]),
-        path.basename(file_path)
-      );
-      const video = await meliPostForm<Record<string, unknown>>(
-        "/pictures",
-        form
-      );
-      return ok({
-        video_id: video.video_id ?? video.id,
-        id: video.id,
-        max_size: video.max_size,
-        quality: video.quality,
       });
     } catch (err) {
       return fail(err);
@@ -993,10 +921,10 @@ registerTool(
         "application/pdf"
       );
       const ext = response_type === "zpl2" ? "zpl" : "pdf";
-      const labelsDir = path.join(rootDir, "labels");
+      const labelsDir = path.join(path.dirname(config.tokensFile), "labels");
       await mkdir(labelsDir, { recursive: true });
       const filePath = path.join(labelsDir, `label_${shipment_id}.${ext}`);
-      await writeFile(filePath, data);
+      await writeFile(filePath, data, { mode: 0o600 });
       return ok({
         file_path: filePath,
         size_bytes: data.length,
