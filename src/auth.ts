@@ -5,19 +5,16 @@ const AUTH_URL = "https://auth.mercadolivre.com.br/authorization";
 const TOKEN_URL = "https://api.mercadolibre.com/oauth/token";
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
-export function buildAuthUrl(): string {
+export function buildAuthUrl(state: string, challenge: string): string {
   const params = new URLSearchParams({
     response_type: "code",
+    state,
+    code_challenge: challenge,
+    code_challenge_method: "S256",
     client_id: config.clientId,
     redirect_uri: config.redirectUri,
   });
   return `${AUTH_URL}?${params.toString()}`;
-}
-
-interface TokenResponse {
-  access_token: string;
-  refresh_token: string;
-  expires_in: number; // seconds (Meli: 6 hours)
 }
 
 async function requestToken(
@@ -30,16 +27,22 @@ async function requestToken(
       Accept: "application/json",
     },
     body: new URLSearchParams(body),
+    signal: AbortSignal.timeout(30_000),
+    redirect: "error",
   });
-  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!res.ok) {
-    throw new Error(
-      `Token request failed (HTTP ${res.status}): ${
-        (data.message as string) ?? JSON.stringify(data)
-      }`
-    );
+  const data: unknown = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(`Token request failed (HTTP ${res.status})`);
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('Invalid token response');
   }
-  const tr = data as unknown as TokenResponse;
+  const tr = data as Record<string, unknown>;
+  const validToken = (value: unknown): value is string =>
+    typeof value === 'string' && value.length > 0 && value.length <= 16384 && !/\s/.test(value);
+  if (!validToken(tr.access_token) || !validToken(tr.refresh_token) ||
+      typeof tr.expires_in !== 'number' || !Number.isSafeInteger(tr.expires_in) ||
+      tr.expires_in <= 0 || tr.expires_in > 31_536_000) {
+    throw new Error('Invalid token response');
+  }
   const tokens: StoredTokens = {
     access_token: tr.access_token,
     refresh_token: tr.refresh_token,
@@ -50,10 +53,12 @@ async function requestToken(
 }
 
 export async function exchangeCodeForTokens(
-  code: string
+  code: string,
+  verifier: string
 ): Promise<StoredTokens> {
   return requestToken({
     grant_type: "authorization_code",
+    code_verifier: verifier,
     client_id: config.clientId,
     client_secret: config.clientSecret,
     code,

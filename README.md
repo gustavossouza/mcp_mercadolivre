@@ -1,3 +1,10 @@
+> **Fork de segurança em revisão; não aprovado para produção HTTP.**
+> O transporte permanece stdio. Não exponha por proxy/túnel sem camada autenticada revisada.
+> Agora o padrão é somente leitura, perfil `leitura`; configurações inválidas abortam.
+> Uploads de arquivos locais e vídeo foram removidos deliberadamente. Imagens usam apenas URL HTTPS pública.
+> OAuth requer state/PKCE e callback local; compatibilidade PKCE com a aplicação Mercado Livre deve ser homologada.
+> Veja `SECURITY-HARDENING.md` para alterações, limitações e migração.
+
 # MCP Mercado Livre
 
 Servidor MCP (Model Context Protocol) em TypeScript para a API do Mercado Livre, focado em vendedores. Permite que LLMs (Claude Desktop, Kimi Code, Cursor etc.) pesquisem o marketplace, publiquem e gerenciem anúncios, respondam perguntas, acompanhem pedidos, envios, reclamações, reputação, catálogo, promoções e muito mais — tudo por linguagem natural.
@@ -229,14 +236,14 @@ Se o Mercado Livre rejeitar a criação com erro de validação, o corpo complet
 # build da imagem
 docker compose build
 
-# autenticação (publica a porta 3333 e imprime a URL para abrir no navegador)
-docker compose --profile auth run --rm --service-ports auth
+# autenticação no HOST confiável, não no container (callback apenas loopback)
+node dist/auth-cli.js
 
 # executar o servidor MCP manualmente (stdio)
 docker compose run --rm mcp-mercadolivre
 ```
 
-Os tokens ficam no volume nomeado `meli-data` (`/app/data/tokens.json` dentro do container), compartilhado entre os serviços `auth` e `mcp-mercadolivre`.
+Os tokens ficam no volume nomeado `meli-data` (`/app/data/tokens.json` dentro do container), usado pelo serviço `mcp-mercadolivre`. O auth em container foi removido; transfira o arquivo de tokens por um fluxo administrativo seguro, sem publicar a porta de callback.
 
 ## Configuração nos clientes MCP
 
@@ -281,7 +288,7 @@ O caminho exato do arquivo de configuração de cada cliente (macOS/Windows/Linu
 }
 ```
 
-> Importante: rode a autenticação (`docker compose --profile auth run --rm --service-ports auth`) antes de usar o servidor via Docker, para que os tokens existam no volume.
+> Importante: rode a autenticação (`node dist/auth-cli.js`) antes de usar o servidor via Docker, para que os tokens existam no volume.
 
 ## Segurança
 
@@ -289,7 +296,7 @@ O servidor inclui um pacote de proteções para operar sua conta com segurança,
 
 ### Modo somente leitura (`ML_READ_ONLY`)
 
-Defina `ML_READ_ONLY=true` no `.env` e **nenhuma ferramenta de escrita é registrada** — o `tools/list` expõe apenas 32 ferramentas de leitura (incluindo `manage_question_blacklist`, que nesse modo aceita somente a ação `list`; `block`/`unblock` retornam erro explicando o modo). **Recomendado: use `ML_READ_ONLY=true` nos primeiros experimentos** e só desligue quando estiver confortável.
+`ML_READ_ONLY=true` e `ML_TOOL_PROFILE=leitura` são os padrões. Para habilitar escritas é necessário configurar explicitamente `ML_READ_ONLY=false` e um perfil de escrita. Valores inválidos interrompem a inicialização. Nenhuma ferramenta de escrita, inclusive blacklist, é registrada no modo leitura.
 
 ### Perfis de ferramentas (`ML_TOOL_PROFILE`)
 
@@ -297,10 +304,10 @@ Limita quais ferramentas o servidor expõe:
 
 | Perfil | Ferramentas | Total |
 |---|---|---|
-| `all` (padrão) | Todas | 42 |
-| `leitura` | Apenas leitura | 31 |
+| `all` (opt-in) | Todas exceto vídeo local | 41 |
+| `leitura` (padrão) | Apenas leitura | 31 |
 | `vendas` | Leitura + responder perguntas, mensagens ao comprador, mensagens em reclamações, blacklist de perguntas | 35 |
-| `publicacao` | Leitura + criar/atualizar anúncios, upload de mídia, opt-in de catálogo | 37 |
+| `publicacao` | Leitura + criar/atualizar anúncios, imagem HTTPS, opt-in de catálogo | 36 |
 
 ### Confirmação de ação irreversível
 
@@ -312,7 +319,7 @@ Limita quais ferramentas o servidor expõe:
 
 ### Log de auditoria
 
-Toda invocação de ferramenta de escrita é registrada em `audit.log` (raiz do projeto, append-only, gitignored) com timestamp, ferramenta, parâmetros (truncados em 500 caracteres) e resultado (`ok`/`error`). Ferramentas de leitura não são logadas.
+Toda invocação de ferramenta de escrita é registrada em `audit.log` (raiz do projeto, append-only, gitignored) com timestamp, ferramenta, e resultado (sem conteúdo dos parâmetros) (`ok`/`error`). Ferramentas de leitura não são logadas.
 
 ### Permissões do arquivo de tokens
 

@@ -9,20 +9,6 @@ services:
       - meli-data:/app/data
     stdin_open: true
 
-  auth:
-    build: .
-    image: mcp-mercadolivre
-    profiles: ["auth"]
-    env_file: .env
-    environment:
-      ML_TOKENS_FILE: /app/data/tokens.json
-    volumes:
-      - meli-data:/app/data
-    ports:
-      - "3333:3333"
-    stdin_open: true
-    tty: true
-    command: ["node", "dist/auth-cli.js"]
 
 volumes:
   meli-data:

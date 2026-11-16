@@ -51,14 +51,18 @@ function resolveTokensFile(): string {
   return cwdFile;
 }
 
+export function parseReadOnly(value: string | undefined): boolean {
+  if (value === undefined || value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
+  throw new Error("ML_READ_ONLY must be true, false, 1 or 0");
+}
+
 export const config = {
   clientId: process.env.ML_CLIENT_ID ?? "",
   clientSecret: process.env.ML_CLIENT_SECRET ?? "",
   siteId: process.env.ML_SITE_ID ?? "MLB",
   redirectUri: process.env.ML_REDIRECT_URI ?? "http://localhost:3333/callback",
   tokensFile: resolveTokensFile(),
-  readOnly: ["true", "1"].includes(
-    (process.env.ML_READ_ONLY ?? "").toLowerCase()
-  ),
-  toolProfile: process.env.ML_TOOL_PROFILE ?? "all",
+  readOnly: parseReadOnly(process.env.ML_READ_ONLY),
+  toolProfile: process.env.ML_TOOL_PROFILE ?? "leitura",
 };

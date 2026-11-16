@@ -1,3 +1,5 @@
+> Security fork: local file_path upload and upload_video are disabled/removed. upload_picture accepts a public HTTPS URL only. See SECURITY-HARDENING.md.
+
 # Referência completa das ferramentas
 
 Documentação das 42 ferramentas do servidor MCP Mercado Livre, fiel à implementação em `src/index.ts`. Tipos: `leitura` (não altera nada na conta) e `escrita` (operação real no Mercado Livre — confirme com o usuário antes de executar).
